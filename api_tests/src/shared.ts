@@ -4,12 +4,14 @@ import {
   BlockInstance,
   BlockInstanceResponse,
   CommunityId,
+  CreatePrivateMessageReport,
   GetReplies,
   GetRepliesResponse,
   GetUnreadCountResponse,
   InstanceId,
   LemmyHttp,
   PostView,
+  PrivateMessageReportResponse,
   SuccessResponse,
 } from "lemmy-js-client";
 import { CreatePost } from "lemmy-js-client/dist/types/CreatePost";
@@ -781,6 +783,18 @@ export async function reportComment(
   return api.createCommentReport(form);
 }
 
+export async function reportPrivateMessage(
+  api: LemmyHttp,
+  private_message_id: number,
+  reason: string,
+): Promise<PrivateMessageReportResponse> {
+  let form: CreatePrivateMessageReport = {
+    private_message_id,
+    reason,
+  };
+  return api.createPrivateMessageReport(form);
+}
+
 export async function listCommentReports(
   api: LemmyHttp,
 ): Promise<ListCommentReportsResponse> {
@@ -791,10 +805,12 @@ export async function listCommentReports(
 export function getPosts(
   api: LemmyHttp,
   listingType?: ListingType,
+  community_id?: number,
 ): Promise<GetPostsResponse> {
   let form: GetPosts = {
     type_: listingType,
     limit: 50,
+    community_id,
   };
   return api.getPosts(form);
 }
@@ -863,6 +879,7 @@ export function getCommentParentId(comment: Comment): number | undefined {
   if (split.length > 1) {
     return Number(split[split.length - 2]);
   } else {
+    console.log(`Failed to extract comment parent id from ${comment.path}`);
     return undefined;
   }
 }

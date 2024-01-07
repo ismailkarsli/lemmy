@@ -5,11 +5,15 @@ use crate::util::{
   LEMMY_TEST_FAST_FEDERATION,
   WORK_FINISHED_RECHECK_DELAY,
 };
-use activitypub_federation::{activity_sending::SendActivityTask, config::Data};
+use activitypub_federation::{
+  activity_sending::SendActivityTask,
+  config::Data,
+  protocol::context::WithContext,
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use lemmy_api_common::{context::LemmyContext, federate_retry_sleep_duration};
-use lemmy_apub::activity_lists::SharedInboxActivities;
+use lemmy_apub::{activity_lists::SharedInboxActivities, FEDERATION_CONTEXT};
 use lemmy_db_schema::{
   newtypes::{ActivityId, CommunityId, InstanceId},
   source::{
@@ -25,6 +29,7 @@ use once_cell::sync::Lazy;
 use reqwest::Url;
 use std::{
   collections::{HashMap, HashSet},
+  ops::Deref,
   time::Duration,
 };
 use tokio::{sync::mpsc::UnboundedSender, time::sleep};
@@ -152,7 +157,15 @@ impl InstanceWorker {
       self.save_and_send_state(pool).await?;
       latest_id
     };
-    if id == latest_id {
+    if id >= latest_id {
+      if id > latest_id {
+        tracing::error!(
+          "{}: last successful id {} is higher than latest id {} in database (did the db get cleared?)",
+          self.instance.domain,
+          id.0,
+          latest_id.0
+        );
+      }
       // no more work to be done, wait before rechecking
       tokio::select! {
         () = sleep(*WORK_FINISHED_RECHECK_DELAY) => {},
@@ -171,6 +184,7 @@ impl InstanceWorker {
         .await
         .context("failed reading activity from db")?
       else {
+        tracing::debug!("{}: {:?} does not exist", self.instance.domain, id);
         self.state.last_successful_id = Some(id);
         continue;
       };
@@ -205,6 +219,7 @@ impl InstanceWorker {
       .await
       .context("failed figuring out inbox urls")?;
     if inbox_urls.is_empty() {
+      tracing::debug!("{}: {:?} no inboxes", self.instance.domain, activity.id);
       self.state.last_successful_id = Some(activity.id);
       self.state.last_successful_published_time = Some(activity.published);
       return Ok(());
@@ -216,12 +231,13 @@ impl InstanceWorker {
       .await
       .context("failed getting actor instance (was it marked deleted / removed?)")?;
 
+    let object = WithContext::new(object.clone(), FEDERATION_CONTEXT.deref().clone());
     let inbox_urls = inbox_urls.into_iter().collect();
     let requests =
-      SendActivityTask::prepare(object, actor.as_ref(), inbox_urls, &self.context).await?;
+      SendActivityTask::prepare(&object, actor.as_ref(), inbox_urls, &self.context).await?;
     for task in requests {
       // usually only one due to shared inbox
-      tracing::info!("sending out {}", task);
+      tracing::debug!("sending out {}", task);
       while let Err(e) = task.sign_and_send(&self.context).await {
         self.state.fail_count += 1;
         self.state.last_retry = Some(Utc::now());

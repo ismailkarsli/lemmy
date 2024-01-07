@@ -1,8 +1,11 @@
 use crate::{
   activities::{generate_activity_id, send_lemmy_activity, verify_person_in_community},
   insert_received_activity,
-  objects::{community::ApubCommunity, person::ApubPerson},
-  protocol::{activities::community::report::Report, InCommunity},
+  objects::{community::ApubCommunity, instance::ApubSite, person::ApubPerson},
+  protocol::{
+    activities::community::report::{Report, ReportObject},
+    InCommunity,
+  },
   PostOrComment,
 };
 use activitypub_federation::{
@@ -19,8 +22,9 @@ use lemmy_db_schema::{
     community::Community,
     person::Person,
     post_report::{PostReport, PostReportForm},
+    site::Site,
   },
-  traits::Reportable,
+  traits::{Crud, Reportable},
 };
 use lemmy_utils::error::LemmyError;
 use url::Url;
@@ -44,18 +48,32 @@ impl Report {
     let report = Report {
       actor: actor.id().into(),
       to: [community.id().into()],
-      object: object_id,
-      summary: reason,
+      object: ReportObject::Lemmy(object_id.clone()),
+      summary: Some(reason),
+      content: None,
       kind,
       id: id.clone(),
       audience: Some(community.id().into()),
     };
-    let inbox = if community.local {
-      ActivitySendTargets::empty()
-    } else {
-      ActivitySendTargets::to_inbox(community.shared_inbox_or_inbox())
+
+    // send report to the community where object was posted
+    let mut inboxes = ActivitySendTargets::to_inbox(community.shared_inbox_or_inbox());
+
+    // also send report to user's home instance if possible
+    let object_creator_id = match object_id.dereference_local(&context).await? {
+      PostOrComment::Post(p) => p.creator_id,
+      PostOrComment::Comment(c) => c.creator_id,
     };
-    send_lemmy_activity(&context, report, &actor, inbox, false).await
+    let object_creator = Person::read(&mut context.pool(), object_creator_id).await?;
+    let object_creator_site: Option<ApubSite> =
+      Site::read_from_instance_id(&mut context.pool(), object_creator.instance_id)
+        .await?
+        .map(Into::into);
+    if let Some(inbox) = object_creator_site.map(|s| s.shared_inbox_or_inbox()) {
+      inboxes.add_inbox(inbox);
+    }
+
+    send_lemmy_activity(&context, report, &actor, inboxes, false).await
   }
 }
 
@@ -83,6 +101,7 @@ impl ActivityHandler for Report {
   #[tracing::instrument(skip_all)]
   async fn receive(self, context: &Data<Self::DataType>) -> Result<(), LemmyError> {
     let actor = self.actor.dereference(context).await?;
+    let reason = self.reason()?;
     match self.object.dereference(context).await? {
       PostOrComment::Post(post) => {
         let report_form = PostReportForm {
@@ -90,7 +109,7 @@ impl ActivityHandler for Report {
           post_id: post.id,
           original_post_name: post.name.clone(),
           original_post_url: post.url.clone(),
-          reason: self.summary.clone(),
+          reason,
           original_post_body: post.body.clone(),
         };
         PostReport::report(&mut context.pool(), &report_form).await?;
@@ -100,7 +119,7 @@ impl ActivityHandler for Report {
           creator_id: actor.id,
           comment_id: comment.id,
           original_comment_text: comment.content.clone(),
-          reason: self.summary.clone(),
+          reason,
         };
         CommentReport::report(&mut context.pool(), &report_form).await?;
       }

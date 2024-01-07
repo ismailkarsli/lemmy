@@ -159,6 +159,7 @@ mod tests {
 
   use crate::{private_message_view::PrivateMessageQuery, structs::PrivateMessageView};
   use lemmy_db_schema::{
+    assert_length,
     source::{
       instance::Instance,
       person::{Person, PersonInsertForm},
@@ -168,6 +169,7 @@ mod tests {
     traits::{Blockable, Crud},
     utils::build_db_pool_for_tests,
   };
+  use pretty_assertions::assert_eq;
   use serial_test::serial;
 
   #[tokio::test]
@@ -210,7 +212,7 @@ mod tests {
       .recipient_id(timmy.id)
       .content(message_content.clone())
       .build();
-    let _inserted_sara_timmy_message_form = PrivateMessage::create(pool, &sara_timmy_message_form)
+    PrivateMessage::create(pool, &sara_timmy_message_form)
       .await
       .unwrap();
 
@@ -219,7 +221,7 @@ mod tests {
       .recipient_id(jess.id)
       .content(message_content.clone())
       .build();
-    let _inserted_sara_jess_message_form = PrivateMessage::create(pool, &sara_jess_message_form)
+    PrivateMessage::create(pool, &sara_jess_message_form)
       .await
       .unwrap();
 
@@ -228,7 +230,7 @@ mod tests {
       .recipient_id(sara.id)
       .content(message_content.clone())
       .build();
-    let _inserted_timmy_sara_message_form = PrivateMessage::create(pool, &timmy_sara_message_form)
+    PrivateMessage::create(pool, &timmy_sara_message_form)
       .await
       .unwrap();
 
@@ -237,20 +239,20 @@ mod tests {
       .recipient_id(timmy.id)
       .content(message_content.clone())
       .build();
-    let _inserted_jess_timmy_message_form = PrivateMessage::create(pool, &jess_timmy_message_form)
+    PrivateMessage::create(pool, &jess_timmy_message_form)
       .await
       .unwrap();
 
     let timmy_messages = PrivateMessageQuery {
       unread_only: false,
-      creator_id: Option::None,
+      creator_id: None,
       ..Default::default()
     }
     .list(pool, timmy.id)
     .await
     .unwrap();
 
-    assert_eq!(timmy_messages.len(), 3);
+    assert_length!(3, &timmy_messages);
     assert_eq!(timmy_messages[0].creator.id, jess.id);
     assert_eq!(timmy_messages[0].recipient.id, timmy.id);
     assert_eq!(timmy_messages[1].creator.id, timmy.id);
@@ -260,14 +262,14 @@ mod tests {
 
     let timmy_unread_messages = PrivateMessageQuery {
       unread_only: true,
-      creator_id: Option::None,
+      creator_id: None,
       ..Default::default()
     }
     .list(pool, timmy.id)
     .await
     .unwrap();
 
-    assert_eq!(timmy_unread_messages.len(), 2);
+    assert_length!(2, &timmy_unread_messages);
     assert_eq!(timmy_unread_messages[0].creator.id, jess.id);
     assert_eq!(timmy_unread_messages[0].recipient.id, timmy.id);
     assert_eq!(timmy_unread_messages[1].creator.id, sara.id);
@@ -282,7 +284,7 @@ mod tests {
     .await
     .unwrap();
 
-    assert_eq!(timmy_sara_messages.len(), 2);
+    assert_length!(2, &timmy_sara_messages);
     assert_eq!(timmy_sara_messages[0].creator.id, timmy.id);
     assert_eq!(timmy_sara_messages[0].recipient.id, sara.id);
     assert_eq!(timmy_sara_messages[1].creator.id, sara.id);
@@ -297,7 +299,7 @@ mod tests {
     .await
     .unwrap();
 
-    assert_eq!(timmy_sara_unread_messages.len(), 1);
+    assert_length!(1, &timmy_sara_unread_messages);
     assert_eq!(timmy_sara_unread_messages[0].creator.id, sara.id);
     assert_eq!(timmy_sara_unread_messages[0].recipient.id, timmy.id);
 
@@ -320,18 +322,21 @@ mod tests {
 
     let timmy_messages = PrivateMessageQuery {
       unread_only: true,
-      creator_id: Option::None,
+      creator_id: None,
       ..Default::default()
     }
     .list(pool, timmy.id)
     .await
     .unwrap();
 
-    assert_eq!(timmy_messages.len(), 1);
+    assert_length!(1, &timmy_messages);
 
     let timmy_unread_messages = PrivateMessageView::get_unread_messages(pool, timmy.id)
       .await
       .unwrap();
     assert_eq!(timmy_unread_messages, 1);
+
+    // This also deletes all persons and private messages thanks to sql `on delete cascade`
+    Instance::delete(pool, instance.id).await.unwrap();
   }
 }

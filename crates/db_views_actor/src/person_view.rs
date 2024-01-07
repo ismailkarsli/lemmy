@@ -1,6 +1,5 @@
 use crate::structs::PersonView;
 use diesel::{
-  dsl::exists,
   pg::Pg,
   result::Error,
   BoolExpressionMethods,
@@ -13,7 +12,17 @@ use diesel_async::RunQueryDsl;
 use lemmy_db_schema::{
   newtypes::PersonId,
   schema::{local_user, person, person_aggregates},
-  utils::{fuzzy_search, limit_and_offset, now, DbConn, DbPool, ListFn, Queries, ReadFn},
+  utils::{
+    functions::coalesce,
+    fuzzy_search,
+    limit_and_offset,
+    now,
+    DbConn,
+    DbPool,
+    ListFn,
+    Queries,
+    ReadFn,
+  },
   SortType,
 };
 use serde::{Deserialize, Serialize};
@@ -48,21 +57,15 @@ fn post_to_person_sort_type(sort: SortType) -> PersonSortType {
 
 fn queries<'a>(
 ) -> Queries<impl ReadFn<'a, PersonView, PersonId>, impl ListFn<'a, PersonView, ListMode>> {
-  let creator_is_admin = exists(
-    local_user::table.filter(
-      person::id
-        .eq(local_user::person_id)
-        .and(local_user::admin.eq(true)),
-    ),
-  );
   let all_joins = move |query: person::BoxedQuery<'a, Pg>| {
     query
       .inner_join(person_aggregates::table)
+      .left_join(local_user::table)
       .filter(person::deleted.eq(false))
       .select((
         person::all_columns,
         person_aggregates::all_columns,
-        creator_is_admin,
+        coalesce(local_user::admin.nullable(), false),
       ))
   };
 
@@ -77,7 +80,7 @@ fn queries<'a>(
     match mode {
       ListMode::Admins => {
         query = query
-          .filter(creator_is_admin.eq(true))
+          .filter(local_user::admin.eq(true))
           .filter(person::deleted.eq(false))
           .order_by(person::published);
       }
@@ -156,6 +159,7 @@ mod tests {
   use super::*;
   use diesel::NotFound;
   use lemmy_db_schema::{
+    assert_length,
     source::{
       instance::Instance,
       local_user::{LocalUser, LocalUserInsertForm, LocalUserUpdateForm},
@@ -164,6 +168,7 @@ mod tests {
     traits::Crud,
     utils::build_db_pool_for_tests,
   };
+  use pretty_assertions::assert_eq;
   use serial_test::serial;
 
   struct Data {
@@ -253,7 +258,7 @@ mod tests {
     .list(pool)
     .await
     .unwrap();
-    assert_eq!(list.len(), 1);
+    assert_length!(1, list);
     assert_eq!(list[0].person.id, data.bob.id);
 
     cleanup(data, pool).await;
@@ -278,7 +283,7 @@ mod tests {
     .unwrap();
 
     let list = PersonView::banned(pool).await.unwrap();
-    assert_eq!(list.len(), 1);
+    assert_length!(1, list);
     assert_eq!(list[0].person.id, data.alice.id);
 
     cleanup(data, pool).await;
@@ -303,7 +308,7 @@ mod tests {
     .unwrap();
 
     let list = PersonView::admins(pool).await.unwrap();
-    assert_eq!(list.len(), 1);
+    assert_length!(1, list);
     assert_eq!(list[0].person.id, data.alice.id);
 
     let is_admin = PersonView::read(pool, data.alice.id)

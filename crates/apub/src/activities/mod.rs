@@ -23,13 +23,11 @@ use crate::{
     create_or_update::{note::CreateOrUpdateNote, page::CreateOrUpdatePage},
     CreateOrUpdateType,
   },
-  CONTEXT,
 };
 use activitypub_federation::{
   config::Data,
   fetch::object_id::ObjectId,
   kinds::{activity::AnnounceType, public},
-  protocol::context::WithContext,
   traits::{ActivityHandler, Actor},
 };
 use anyhow::anyhow;
@@ -44,7 +42,6 @@ use lemmy_db_schema::source::{
 use lemmy_db_views_actor::structs::{CommunityPersonBanView, CommunityView};
 use lemmy_utils::error::{LemmyError, LemmyErrorExt, LemmyErrorType, LemmyResult};
 use serde::Serialize;
-use std::ops::Deref;
 use tracing::info;
 use url::{ParseError, Url};
 use uuid::Uuid;
@@ -204,7 +201,6 @@ where
   Activity: ActivityHandler<Error = LemmyError>,
 {
   info!("Saving outgoing activity to queue {}", activity.id());
-  let activity = WithContext::new(activity, CONTEXT.deref().clone());
 
   let form = SentActivityForm {
     ap_id: activity.id().clone().into(),
@@ -225,11 +221,12 @@ where
   Ok(())
 }
 
-pub async fn handle_outgoing_activities(context: Data<LemmyContext>) -> LemmyResult<()> {
+pub async fn handle_outgoing_activities(context: Data<LemmyContext>) {
   while let Some(data) = ActivityChannel::retrieve_activity().await {
-    match_outgoing_activities(data, &context.reset_request_count()).await?
+    if let Err(e) = match_outgoing_activities(data, &context.reset_request_count()).await {
+      tracing::warn!("error while saving outgoing activity to db: {e}");
+    }
   }
-  Ok(())
 }
 
 pub async fn match_outgoing_activities(

@@ -1,4 +1,3 @@
-use super::instance::coalesce;
 use crate::{
   newtypes::{CommunityId, DbUrl, PersonId, PostId},
   schema::post::dsl::{
@@ -30,6 +29,7 @@ use crate::{
   },
   traits::{Crud, Likeable, Saveable},
   utils::{
+    functions::coalesce,
     get_conn,
     naive_now,
     DbPool,
@@ -366,6 +366,7 @@ mod tests {
     traits::{Crud, Likeable, Saveable},
     utils::build_db_pool_for_tests,
   };
+  use pretty_assertions::assert_eq;
   use serial_test::serial;
   use std::collections::HashSet;
 
